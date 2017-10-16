@@ -1,0 +1,2 @@
+# Don't submit vendored code to git.
+/vendor/
