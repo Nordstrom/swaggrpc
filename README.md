@@ -3,7 +3,7 @@
 
 This uses [openapi2proto](https://github.com/NYTimes/openapi2proto) to generate a
 [protocol buffer](https://developers.google.com/protocol-buffers/) service definition from a swagger
-service, then uses [protoreflect](https://github.com/jhump/protoreflect) to serve the new API.
+specification, then uses [protoreflect](https://github.com/jhump/protoreflect) to serve the new API.
 Swagger calls are made using [go-openapi](https://github.com/go-openapi).
 
 ## Building
