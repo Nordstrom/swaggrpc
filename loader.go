@@ -14,7 +14,7 @@
 
 package swaggrpc
 
-// Utility functions for gRPC & swagger.
+// Helper function & types to load an in-memory proto file.
 
 import (
 	"bytes"
@@ -46,9 +46,7 @@ func loadProtoFromBytes(contents []byte) (*desc.FileDescriptor, error) {
 	// Generate a fake wrapper for the dummy filename we'll provide.
 	accessor := func(filename string) (io.ReadCloser, error) {
 		if filename == dummyFilename {
-			reader := new(bytesReaderCloser)
-			reader.Reader = bytes.NewReader(contents)
-			return reader, nil
+			return &bytesReaderCloser{Reader: bytes.NewReader(contents)}, nil
 		}
 
 		// Fallback to the default implementation.
