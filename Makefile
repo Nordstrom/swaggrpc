@@ -1,6 +1,10 @@
-# Build everything.
+# Build & test everything.
 .PHONY: all
-all:
+all: build test
+
+# Build everything.
+.PHONY: build
+build:
 	go build $$(go list ./...)
 
 # Test everything.
