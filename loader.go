@@ -20,21 +20,12 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"os"
 
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/desc/protoparse"
 )
-
-// Wrapper around bytes.Reader that implements io.ReadCloser.
-type bytesReaderCloser struct {
-	*bytes.Reader
-}
-
-// Closer implementation. No-op.
-func (*bytesReaderCloser) Close() error {
-	return nil
-}
 
 // Filename used for the in-memory proto file when parsing from memory.
 const dummyFilename = "__dummy"
@@ -46,7 +37,7 @@ func loadProtoFromBytes(contents []byte) (*desc.FileDescriptor, error) {
 	// Generate a fake wrapper for the dummy filename we'll provide.
 	accessor := func(filename string) (io.ReadCloser, error) {
 		if filename == dummyFilename {
-			return &bytesReaderCloser{Reader: bytes.NewReader(contents)}, nil
+			return ioutil.NopCloser(bytes.NewReader(contents)), nil
 		}
 
 		// Fallback to the default implementation.
