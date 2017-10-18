@@ -1,4 +1,7 @@
 # swaggrpc
+
+[![GoDoc][doc-img]][doc] [![Build Status][ci-img]][ci]
+
 [gRPC](https://grpc.io/) wrapper around [swagger](https://swagger.io) (Open API) services.
 
 This uses [openapi2proto](https://github.com/NYTimes/openapi2proto) to generate a
@@ -21,3 +24,8 @@ Then:
 ```
 make all
 ```
+
+[doc-img]: https://godoc.org/github.com/Nordstrom/swaggrpc?status.svg
+[doc]: https://godoc.org/github.com/Nordstrom/swaggrpc
+[ci-img]: https://travis-ci.org/Nordstrom/swaggrpc.svg
+[ci]: https://travis-ci.org/Nordstrom/swaggrpc
