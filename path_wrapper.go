@@ -1,0 +1,179 @@
+// This contains pathWrapper, a type that wraps a single swagger path element in a gRPC API.
+//
+// It also contains helper functions for serializing protocol buffers to and from swagger requests.
+
+package swaggrpc
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"strings"
+
+	"github.com/go-openapi/runtime"
+	"github.com/go-openapi/spec"
+
+	"github.com/golang/protobuf/protoc-gen-go/descriptor"
+
+	"github.com/jhump/protoreflect/desc"
+	"github.com/jhump/protoreflect/dynamic"
+)
+
+// Returns a serializer function for a given proto field / parameter pair.
+func getStringConverter(fieldDesc *desc.FieldDescriptor, param *spec.Parameter) (func(interface{}) string, error) {
+	// Maps are a special-case: openapi2proto only creates string-keyed maps, which means we can
+	// easily serialize directly to JSON. Maps interally aren't a FieldDescriptorProto_TYPE, though -
+	// they're an option on the field, so they're handled here.
+	if fieldDesc.IsMap() {
+		return func(value interface{}) string {
+			mapValue, ok := value.(map[interface{}]interface{})
+			if !ok {
+				log.Print("ERROR: Non-map value passed to map converter.")
+				return ""
+			}
+			convertedValue := make(map[string]interface{}, len(mapValue))
+			for key, value := range mapValue {
+				keyString, ok := key.(string)
+				if !ok {
+					log.Print("ERROR: Non-string key passed to map converter.")
+					return ""
+				}
+				convertedValue[keyString] = value
+			}
+			bytes, err := json.Marshal(convertedValue)
+			if err != nil {
+				log.Printf("WARNING: Error JSON serializing: %s.", err)
+				return ""
+			}
+			return string(bytes)
+		}, nil
+	}
+
+	switch fieldDesc.GetType() {
+	case descriptor.FieldDescriptorProto_TYPE_MESSAGE:
+		// For Swagger 2.0, this should work in all cases where the parameter is a body parameter.
+		// The specification is pretty quiet on how non-primitive items should be formatted when passed
+		// as non-body parameters.
+		// This won't work for formData - but openapi2proto also doesn't handle this case, so we don't
+		// have to worry about it here.
+		// Swagger 3.0 has formatting options that this can wrong; specifically, you can specify a
+		// "form" format for data instead of JSON.
+		return func(value interface{}) string {
+			bytes, err := json.Marshal(value)
+			if err != nil {
+				log.Print("WARNING: Error JSON serializing; ignoring.", err)
+			}
+			return string(bytes)
+		}, nil
+	case descriptor.FieldDescriptorProto_TYPE_BOOL:
+		return func(value interface{}) string { return fmt.Sprintf("%t", value) }, nil
+	case descriptor.FieldDescriptorProto_TYPE_INT64, descriptor.FieldDescriptorProto_TYPE_UINT64,
+		descriptor.FieldDescriptorProto_TYPE_INT32, descriptor.FieldDescriptorProto_TYPE_FIXED64,
+		descriptor.FieldDescriptorProto_TYPE_FIXED32, descriptor.FieldDescriptorProto_TYPE_UINT32,
+		descriptor.FieldDescriptorProto_TYPE_SFIXED32, descriptor.FieldDescriptorProto_TYPE_SFIXED64,
+		descriptor.FieldDescriptorProto_TYPE_SINT32, descriptor.FieldDescriptorProto_TYPE_SINT64:
+		return func(value interface{}) string { return fmt.Sprintf("%d", value) }, nil
+	case descriptor.FieldDescriptorProto_TYPE_DOUBLE, descriptor.FieldDescriptorProto_TYPE_FLOAT:
+		return func(value interface{}) string { return fmt.Sprintf("%g", value) }, nil
+	case descriptor.FieldDescriptorProto_TYPE_STRING:
+		return func(value interface{}) string { return value.(string) }, nil
+	case descriptor.FieldDescriptorProto_TYPE_GROUP:
+		// Groups are not handled; openapi2proto only generates proto3 files.
+		return nil, fmt.Errorf("got proto2-only type 'group'")
+	case descriptor.FieldDescriptorProto_TYPE_BYTES:
+		// TODO(jkinkead): openapi2proto does not currently handle bytes; both 'byte' and 'binary'
+		// formats are ignored. This is a bug, however, and we should handle bytes here.
+		return nil, fmt.Errorf("bytes not implemented")
+	case descriptor.FieldDescriptorProto_TYPE_ENUM:
+		return func(value interface{}) string {
+			// Enums are not reliably handled. openapi2proto will treat ANY enum validator
+			// (http://json-schema.org/latest/json-schema-validation.html#rfc.section.6.23) as a set of
+			// strings, even if they are refs to other schemas. Non-string values are simply ignored.
+			// These values are translated lossily to an enum name in the proto file. In order to
+			// serialize, we rely on the fact that these are in the same order in the schema as in the
+			// proto file, and use the field value as an array index.
+			rawValue := value.(int32)
+			if rawValue >= int32(len(param.Enum)) {
+				// This should not happen when proto & swagger are in sync. Default to a non-panic outcome
+				// (empty string) in case of bad input.
+				log.Printf("ERROR: raw enum value '%d' out-of-bounds for param %s", rawValue, param.Name)
+				return ""
+			}
+			enumValue, ok := param.Enum[rawValue].(string)
+			if !ok {
+				// This should not happen - openapi2proto won't generate a proto enum in this case. Default
+				// to a non-panic outcome (empty string) in case something changes.
+				return ""
+			}
+			return enumValue
+		}, nil
+	default:
+		return nil, fmt.Errorf("ERROR: unhandled field type %s", fieldDesc.GetType())
+	}
+}
+
+// Converts a single or repeated message into a slice of serialized strings for the given field
+// descriptor, converted using the given toString function.
+// go-openapi parameter APIs operate in terms of lists of strings.
+func convertValues(
+	message *dynamic.Message,
+	fieldDesc *desc.FieldDescriptor,
+	toString func(interface{}) string,
+) []string {
+	rawValue := message.GetField(fieldDesc)
+	var values []interface{}
+	// Maps will report as repeated. This should ignore maps.
+	if fieldDesc.IsRepeated() && !fieldDesc.IsMap() {
+		values = rawValue.([]interface{})
+	} else {
+		values = []interface{}{rawValue}
+	}
+	stringValues := make([]string, len(values))
+	for i, value := range values {
+		stringValues[i] = toString(value)
+	}
+	return stringValues
+}
+
+// Returns a function which will write the given param to a request. The param will be passed into
+// the function as an already-serialized string.
+func getParamWriter(param *spec.Parameter) (func([]string, runtime.ClientRequest) error, error) {
+	// Determine the parameter type, and return an appropriate serializer for it.
+	switch param.In {
+	case "query":
+		return func(values []string, request runtime.ClientRequest) error {
+			return request.SetQueryParam(param.Name, values...)
+		}, nil
+	case "header":
+		return func(values []string, request runtime.ClientRequest) error {
+			return request.SetHeaderParam(param.Name, values...)
+		}, nil
+	case "path":
+		// NOTE: Some swagger files have "path" parameters that are actually in the query string. This
+		// doesn't check for this case.
+		return func(values []string, request runtime.ClientRequest) error {
+			if len(values) > 1 {
+				log.Printf("WARNING: parameter %s had multple values, only one allowed!", param.Name)
+			}
+			return request.SetPathParam(param.Name, values[0])
+		}, nil
+	case "body":
+		// NOTE: This is for Swagger 2.0 only. Swagger 3.0 has the body defined elsewhere.
+		return func(values []string, request runtime.ClientRequest) error {
+			if len(values) > 1 {
+				log.Printf("WARNING: parameter %s had multple values, only one allowed!", param.Name)
+			}
+			// go-openapi expects this to be either a Reader, or something with a configured Producer.
+			return request.SetBodyParam(strings.NewReader(values[0]))
+		}, nil
+	case "formData":
+		// This is not generated by openapi2proto.
+		return nil, fmt.Errorf("formData parameters are not supported")
+	case "cookie":
+		// These are 3.0-only.
+		return nil, fmt.Errorf("swagger 3.0 cookie parameters are not supported")
+	default:
+		return nil, fmt.Errorf("ERROR: Unknown parameter location %q for parameter %q",
+			param.In, param.Name)
+	}
+}
