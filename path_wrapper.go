@@ -16,14 +16,29 @@ import (
 	"github.com/go-openapi/spec"
 	"github.com/go-openapi/strfmt"
 
+	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
+
+	"google.golang.org/grpc"
 )
 
 // A function to write a single parameter value from a proto message to a swagger request.
 type swaggerParamWriter func(*dynamic.Message, runtime.ClientRequest) error
+
+// Constant unmarshaller, configured to be lenient with respect to extra JSON values.
+var permissiveJSONUnmarshaler jsonpb.Unmarshaler
+
+func init() {
+	permissiveJSONUnmarshaler.AllowUnknownFields = true
+}
+
+// Constant no-op AuthWriter, needed for the go-openapi client.
+var nopAuthWriter runtime.ClientAuthInfoWriterFunc = func(runtime.ClientRequest, strfmt.Registry) error {
+	return nil
+}
 
 // A wrapper for a single endpoint in a swagger service. This matches a path+method in a swagger
 // definition, and is exposed as a single gRPC method.
@@ -265,4 +280,57 @@ func (p *pathWrapper) getRequestWriter(msg *dynamic.Message) runtime.ClientReque
 		}
 		return nil
 	}
+}
+
+// The deserializer function for this endpoint. This implements runtime.ClientResponseReader.
+func (p *pathWrapper) ReadResponse(
+	response runtime.ClientResponse,
+	consumer runtime.Consumer) (interface{}, error) {
+
+	protoOut := dynamic.NewMessage(p.outputProtoType)
+
+	err := permissiveJSONUnmarshaler.Unmarshal(response.Body(), protoOut)
+	return protoOut, err
+}
+
+// Handles a single gRPC call by proxying to the underlying swagger service.
+// Returns any error encountered.
+func (p *pathWrapper) handleGRPCRequest(stream grpc.ServerStream) error {
+	protoIn := dynamic.NewMessage(p.inputProtoType)
+	err := stream.RecvMsg(protoIn)
+	if err != nil {
+		log.Printf("Error deserializing request: %s", err)
+		return err
+	}
+
+	clientOps := runtime.ClientOperation{
+		// This appears to be ignored client-side.
+		ID:          "",
+		Method:      p.httpMethod,
+		PathPattern: p.swaggerPath,
+		// TODO(jkinkead): Fix these two - they should be determinable from the spec.
+		ConsumesMediaTypes: []string{"application/json"},
+		ProducesMediaTypes: []string{"application/json"},
+		// TODO(jkinkead): Fix this. It should be in the spec.
+		Schemes:  []string{"http"},
+		Params:   p.getRequestWriter(protoIn),
+		Reader:   p,
+		AuthInfo: nopAuthWriter,
+		Context:  nil,
+		Client:   p.httpClient,
+	}
+
+	result, err := p.swaggerClient.Submit(&clientOps)
+	if err != nil {
+		log.Printf("Got non-nil error: %s", err)
+		return err
+	}
+
+	resultMessage, isOk := result.(*dynamic.Message)
+	if !isOk {
+		// Should not happen.
+		return fmt.Errorf("could not cast to expected result type")
+	}
+
+	return stream.SendMsg(resultMessage)
 }
