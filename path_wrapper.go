@@ -8,16 +8,91 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"strings"
 
 	"github.com/go-openapi/runtime"
+	runtimeclient "github.com/go-openapi/runtime/client"
 	"github.com/go-openapi/spec"
+	"github.com/go-openapi/strfmt"
 
 	"github.com/golang/protobuf/protoc-gen-go/descriptor"
 
 	"github.com/jhump/protoreflect/desc"
 	"github.com/jhump/protoreflect/dynamic"
 )
+
+// A function to write a single parameter value from a proto message to a swagger request.
+type swaggerParamWriter func(*dynamic.Message, runtime.ClientRequest) error
+
+// A wrapper for a single endpoint in a swagger service. This matches a path+method in a swagger
+// definition, and is exposed as a single gRPC method.
+type pathWrapper struct {
+	// The HTTP client to use. This is shared among all services on a gRPCProxy.
+	httpClient *http.Client
+	// The swagger client to use. This is shared among all endpoints in a swaggerService.
+	swaggerClient *runtimeclient.Runtime
+	// The HTTP method this endpoint talks on.
+	httpMethod string
+	// Swagger path definition for this endpoint. This may contain path templates, and may not contain
+	// query strings.
+	swaggerPath string
+	// All parameter writer functions to serialize a request.
+	paramWriters []swaggerParamWriter
+	// The proto message type this receives as input.
+	inputProtoType *desc.MessageDescriptor
+	// The proto message type this returns as output.
+	outputProtoType *desc.MessageDescriptor
+}
+
+// Construct a new endpoint from the given swagger & proto method descriptions.
+func newPathWrapper(
+	httpClient *http.Client,
+	swaggerClient *runtimeclient.Runtime,
+	httpMethod string,
+	swaggerPath string,
+	parameters map[string]*spec.Parameter,
+	method *desc.MethodDescriptor,
+) (*pathWrapper, error) {
+	inputProtoType := method.GetInputType()
+	newValue := &pathWrapper{
+		httpClient:      httpClient,
+		swaggerClient:   swaggerClient,
+		httpMethod:      httpMethod,
+		swaggerPath:     swaggerPath,
+		paramWriters:    make([]swaggerParamWriter, 0, len(parameters)),
+		inputProtoType:  inputProtoType,
+		outputProtoType: method.GetOutputType(),
+	}
+
+	for _, param := range parameters {
+		// Look up the field for this input proto.
+		// TODO(jkinkead): Test the robustness of this.
+		fieldName := strings.Replace(param.Name, "-", "_", -1)
+		fieldDesc := inputProtoType.FindFieldByName(fieldName)
+		if fieldDesc == nil {
+			return nil, fmt.Errorf("Could not find proto field named %s", fieldName)
+		}
+
+		stringConverter, err := getStringConverter(fieldDesc, param)
+		if err != nil {
+			return nil, err
+		}
+		paramWriter, err := getParamWriter(param)
+		if err != nil {
+			return nil, err
+		}
+
+		swaggerParamWriter := func(message *dynamic.Message, request runtime.ClientRequest) error {
+			stringValues := convertValues(message, fieldDesc, stringConverter)
+			return paramWriter(stringValues, request)
+		}
+
+		newValue.paramWriters = append(newValue.paramWriters, swaggerParamWriter)
+	}
+
+	return newValue, nil
+}
 
 // Returns a serializer function for a given proto field / parameter pair.
 func getStringConverter(fieldDesc *desc.FieldDescriptor, param *spec.Parameter) (func(interface{}) string, error) {
@@ -175,5 +250,19 @@ func getParamWriter(param *spec.Parameter) (func([]string, runtime.ClientRequest
 	default:
 		return nil, fmt.Errorf("ERROR: Unknown parameter location %q for parameter %q",
 			param.In, param.Name)
+	}
+}
+
+// Returns a serializer function for the given message. This is used to send a request through the
+// openapi-go library.
+func (p *pathWrapper) getRequestWriter(msg *dynamic.Message) runtime.ClientRequestWriterFunc {
+	return func(request runtime.ClientRequest, format strfmt.Registry) error {
+		for _, writer := range p.paramWriters {
+			err := writer(msg, request)
+			if err != nil {
+				return err
+			}
+		}
+		return nil
 	}
 }
