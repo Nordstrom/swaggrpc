@@ -40,7 +40,7 @@
 [[projects]]
   branch = "master"
   name = "github.com/go-openapi/runtime"
-  packages = ["."]
+  packages = [".","client"]
   revision = "e8231e16de5bcda9839e03ae07c5c96a1fd82041"
 
 [[projects]]
@@ -64,7 +64,7 @@
 [[projects]]
   branch = "master"
   name = "github.com/golang/protobuf"
-  packages = ["jsonpb","proto","protoc-gen-go/descriptor","protoc-gen-go/plugin","ptypes/any","ptypes/duration","ptypes/empty","ptypes/struct","ptypes/timestamp","ptypes/wrappers"]
+  packages = ["jsonpb","proto","protoc-gen-go/descriptor","protoc-gen-go/plugin","ptypes","ptypes/any","ptypes/duration","ptypes/empty","ptypes/struct","ptypes/timestamp","ptypes/wrappers"]
   revision = "130e6b02ab059e7b717a096f397c5b60111cae74"
 
 [[projects]]
@@ -88,7 +88,7 @@
 [[projects]]
   branch = "master"
   name = "golang.org/x/net"
-  packages = ["context","idna"]
+  packages = ["context","context/ctxhttp","http2","http2/hpack","idna","internal/timeseries","lex/httplex","trace"]
   revision = "a04bdaca5b32abe1c069418fb7088ae607de5bd0"
 
 [[projects]]
@@ -100,8 +100,14 @@
 [[projects]]
   branch = "master"
   name = "google.golang.org/genproto"
-  packages = ["protobuf/api","protobuf/field_mask","protobuf/ptype","protobuf/source_context"]
+  packages = ["googleapis/rpc/status","protobuf/api","protobuf/field_mask","protobuf/ptype","protobuf/source_context"]
   revision = "f676e0f3ac6395ff1a529ae59a6670878a8371a6"
+
+[[projects]]
+  name = "google.golang.org/grpc"
+  packages = [".","balancer","codes","connectivity","credentials","grpclb/grpc_lb_v1/messages","grpclog","internal","keepalive","metadata","naming","peer","resolver","stats","status","tap","transport"]
+  revision = "f7bf885db0b7479a537ec317c6e48ce53145f3db"
+  version = "v1.7.0"
 
 [[projects]]
   branch = "v2"
@@ -118,6 +124,6 @@
 [solve-meta]
   analyzer-name = "dep"
   analyzer-version = 1
-  inputs-digest = "03b3a3881de1c40465629d713e9ddaaa8b39a9468d091510c4f79ddf84232e86"
+  inputs-digest = "7e9afb40df8983b7093b13fe30451fabe24bec13ddb3a696f29d0ef40dd62bfb"
   solver-name = "gps-cdcl"
   solver-version = 1
