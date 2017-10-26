@@ -6,10 +6,10 @@ import (
 	"testing"
 
 	"github.com/go-openapi/spec"
-
 	"github.com/golang/protobuf/jsonpb"
-
 	"github.com/jhump/protoreflect/dynamic"
+	assertions "github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // Tests that getStringConverter returns the correct JSON serializer for proto types.
@@ -38,13 +38,9 @@ message TestMessage {
 }
 `
 	fileDesc, err := loadProtoFromBytes(([]byte)(protoContent))
-	if err != nil {
-		t.Fatalf("Couldn't parse test fixture proto: %s", err)
-	}
+	require.Nil(t, err, "Couldn't parse test fixture proto: %v", err)
 	messageType := fileDesc.FindMessage("TestMessage")
-	if messageType == nil {
-		t.Fatal("Couldn't find TestMessage")
-	}
+	require.NotNil(t, messageType, "Couldn't find TestMessage in parsed proto")
 	fixtures := []struct {
 		fieldName   string
 		parameter   *spec.Parameter
@@ -62,21 +58,17 @@ message TestMessage {
 	}
 	for _, fixture := range fixtures {
 		t.Run(strings.Title(fixture.fieldName), func(t *testing.T) {
+			assert := assertions.New(t)
 			fieldDesc := messageType.FindFieldByName(fixture.fieldName)
 			converter, err := getStringConverter(fieldDesc, fixture.parameter)
-			if err != nil {
-				t.Errorf("Got non-nil error fetching converter: %s", err)
-			}
+			assert.Nil(err, "Error fetching converter: %v", err)
+			assert.NotNil(converter, "Nil converter")
 			if converter != nil {
 				message := dynamic.NewMessage(messageType)
 				err = jsonpb.Unmarshal(bytes.NewBuffer([]byte(fixture.textMessage)), message)
-				if err != nil {
-					t.Errorf("Error unmarshaling text data: %s", err)
-				}
+				assert.Nil(err, "Error unmarshaling text data: %s", err)
 				result := converter(message.GetField(fieldDesc))
-				if result != fixture.result {
-					t.Errorf("Got serialized value %q; expected %q.", result, fixture.result)
-				}
+				assert.Equal(fixture.result, result, "Bad serialized value")
 			}
 		})
 	}
@@ -95,13 +87,9 @@ message TestMessage {
 }
 `
 	fileDesc, err := loadProtoFromBytes(([]byte)(protoContent))
-	if err != nil {
-		t.Fatal("Couldn't parse test fixture proto")
-	}
+	require.Nil(t, err, "Couldn't parse test fixture proto: %v", err)
 	messageType := fileDesc.FindMessage("TestMessage")
-	if messageType == nil {
-		t.Fatal("Couldn't find TestMessage")
-	}
+	require.NotNil(t, messageType, "Couldn't find TestMessage in parsed proto")
 	fixtures := []struct {
 		fieldName   string
 		textMessage string
@@ -113,11 +101,10 @@ message TestMessage {
 	}
 	for _, fixture := range fixtures {
 		t.Run(strings.Title(fixture.fieldName), func(t *testing.T) {
+			assert := assertions.New(t)
 			message := dynamic.NewMessage(messageType)
 			err := jsonpb.Unmarshal(bytes.NewBuffer([]byte(fixture.textMessage)), message)
-			if err != nil {
-				t.Errorf("Error unmarshaling text data: %s", err)
-			}
+			assert.Nil(err, "Error unmarshaling text data: %v", err)
 			fieldDesc := messageType.FindFieldByName(fixture.fieldName)
 			result := convertValues(message, fieldDesc, func(input interface{}) string {
 				// Test with an echoing toString function.
@@ -131,13 +118,9 @@ message TestMessage {
 				}
 				return "UNKNOWN"
 			})
-			if len(fixture.result) != len(result) {
-				t.Errorf("Expected %d results; got %d", len(fixture.result), len(result))
-			} else {
+			if assert.Equal(len(fixture.result), len(result), "Mismatched result length") {
 				for i, item := range fixture.result {
-					if item != result[i] {
-						t.Errorf("For item %d, expected %q, got %q", i, item, result[i])
-					}
+					assert.Equal(item, result[i], "Bad result for item %d")
 				}
 			}
 		})
