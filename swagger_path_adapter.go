@@ -1,4 +1,5 @@
-// This contains pathWrapper, a type that wraps a single swagger path element in a gRPC API.
+// This contains swaggerPathAdapter, a type that adapts a single swagger path element to a gRPC
+// method.
 //
 // It also contains helper functions for serializing protocol buffers to and from swagger requests.
 
@@ -29,11 +30,7 @@ import (
 type swaggerParamWriter func(*dynamic.Message, runtime.ClientRequest) error
 
 // Constant unmarshaller, configured to be lenient with respect to extra JSON values.
-var permissiveJSONUnmarshaler jsonpb.Unmarshaler
-
-func init() {
-	permissiveJSONUnmarshaler.AllowUnknownFields = true
-}
+var permissiveJSONUnmarshaler jsonpb.Unmarshaler = jsonpb.Unmarshaler{AllowUnknownFields: true}
 
 // Constant no-op AuthWriter, needed for the go-openapi client.
 var nopAuthWriter runtime.ClientAuthInfoWriterFunc = func(runtime.ClientRequest, strfmt.Registry) error {
@@ -42,7 +39,7 @@ var nopAuthWriter runtime.ClientAuthInfoWriterFunc = func(runtime.ClientRequest,
 
 // A wrapper for a single endpoint in a swagger service. This matches a path+method in a swagger
 // definition, and is exposed as a single gRPC method.
-type pathWrapper struct {
+type swaggerPathAdapter struct {
 	// The HTTP client to use. This is shared among all services on a gRPCProxy.
 	httpClient *http.Client
 	// The swagger client to use. This is shared among all endpoints in a swaggerService.
@@ -68,9 +65,9 @@ func newPathWrapper(
 	swaggerPath string,
 	parameters map[string]*spec.Parameter,
 	method *desc.MethodDescriptor,
-) (*pathWrapper, error) {
+) (*swaggerPathAdapter, error) {
 	inputProtoType := method.GetInputType()
-	newValue := &pathWrapper{
+	newValue := &swaggerPathAdapter{
 		httpClient:      httpClient,
 		swaggerClient:   swaggerClient,
 		httpMethod:      httpMethod,
@@ -155,16 +152,15 @@ func getStringConverter(fieldDesc *desc.FieldDescriptor, param *spec.Parameter) 
 			}
 			return string(bytes)
 		}, nil
-	case descriptor.FieldDescriptorProto_TYPE_BOOL:
-		return func(value interface{}) string { return fmt.Sprintf("%t", value) }, nil
-	case descriptor.FieldDescriptorProto_TYPE_INT64, descriptor.FieldDescriptorProto_TYPE_UINT64,
+	case descriptor.FieldDescriptorProto_TYPE_BOOL,
+	  descriptor.FieldDescriptorProto_TYPE_INT64, descriptor.FieldDescriptorProto_TYPE_UINT64,
 		descriptor.FieldDescriptorProto_TYPE_INT32, descriptor.FieldDescriptorProto_TYPE_FIXED64,
 		descriptor.FieldDescriptorProto_TYPE_FIXED32, descriptor.FieldDescriptorProto_TYPE_UINT32,
 		descriptor.FieldDescriptorProto_TYPE_SFIXED32, descriptor.FieldDescriptorProto_TYPE_SFIXED64,
-		descriptor.FieldDescriptorProto_TYPE_SINT32, descriptor.FieldDescriptorProto_TYPE_SINT64:
-		return func(value interface{}) string { return fmt.Sprintf("%d", value) }, nil
-	case descriptor.FieldDescriptorProto_TYPE_DOUBLE, descriptor.FieldDescriptorProto_TYPE_FLOAT:
-		return func(value interface{}) string { return fmt.Sprintf("%g", value) }, nil
+		descriptor.FieldDescriptorProto_TYPE_SINT32, descriptor.FieldDescriptorProto_TYPE_SINT64,
+	  descriptor.FieldDescriptorProto_TYPE_DOUBLE, descriptor.FieldDescriptorProto_TYPE_FLOAT:
+		// %v does what we want for numeric + boolean types.
+		return func(value interface{}) string { return fmt.Sprintf("%v", value) }, nil
 	case descriptor.FieldDescriptorProto_TYPE_STRING:
 		return func(value interface{}) string { return value.(string) }, nil
 	case descriptor.FieldDescriptorProto_TYPE_GROUP:
@@ -270,7 +266,7 @@ func getParamWriter(param *spec.Parameter) (func([]string, runtime.ClientRequest
 
 // Returns a serializer function for the given message. This is used to send a request through the
 // openapi-go library.
-func (p *pathWrapper) getRequestWriter(msg *dynamic.Message) runtime.ClientRequestWriterFunc {
+func (p *swaggerPathAdapter) getRequestWriter(msg *dynamic.Message) runtime.ClientRequestWriterFunc {
 	return func(request runtime.ClientRequest, format strfmt.Registry) error {
 		for _, writer := range p.paramWriters {
 			err := writer(msg, request)
@@ -283,7 +279,7 @@ func (p *pathWrapper) getRequestWriter(msg *dynamic.Message) runtime.ClientReque
 }
 
 // The deserializer function for this endpoint. This implements runtime.ClientResponseReader.
-func (p *pathWrapper) ReadResponse(
+func (p *swaggerPathAdapter) ReadResponse(
 	response runtime.ClientResponse,
 	consumer runtime.Consumer) (interface{}, error) {
 
@@ -295,7 +291,7 @@ func (p *pathWrapper) ReadResponse(
 
 // Handles a single gRPC call by proxying to the underlying swagger service.
 // Returns any error encountered.
-func (p *pathWrapper) handleGRPCRequest(stream grpc.ServerStream) error {
+func (p *swaggerPathAdapter) handleGRPCRequest(stream grpc.ServerStream) error {
 	protoIn := dynamic.NewMessage(p.inputProtoType)
 	err := stream.RecvMsg(protoIn)
 	if err != nil {
@@ -303,7 +299,7 @@ func (p *pathWrapper) handleGRPCRequest(stream grpc.ServerStream) error {
 		return err
 	}
 
-	clientOps := runtime.ClientOperation{
+	operation := runtime.ClientOperation{
 		// This appears to be ignored client-side.
 		ID:          "",
 		Method:      p.httpMethod,
@@ -320,7 +316,7 @@ func (p *pathWrapper) handleGRPCRequest(stream grpc.ServerStream) error {
 		Client:   p.httpClient,
 	}
 
-	result, err := p.swaggerClient.Submit(&clientOps)
+	result, err := p.swaggerClient.Submit(&operation)
 	if err != nil {
 		log.Printf("Got non-nil error: %s", err)
 		return err
