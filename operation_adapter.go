@@ -1,5 +1,5 @@
-// This contains swaggerPathAdapter, a type that adapts a single swagger path element to a gRPC
-// method.
+// This contains operationAdapter, a type that adapts a single swagger operation (path + HTTP
+// method) to a gRPC method.
 //
 // It also contains helper functions for serializing protocol buffers to and from swagger requests.
 
@@ -37,9 +37,9 @@ var nopAuthWriter runtime.ClientAuthInfoWriterFunc = func(runtime.ClientRequest,
 	return nil
 }
 
-// A wrapper for a single endpoint in a swagger service. This matches a path+method in a swagger
+// A wrapper for a single operation in a swagger service. This matches a path+method in a swagger
 // definition, and is exposed as a single gRPC method.
-type swaggerPathAdapter struct {
+type operationAdapter struct {
 	// The HTTP client to use. This is shared among all services on a gRPCProxy.
 	httpClient *http.Client
 	// The swagger client to use. This is shared among all endpoints in a swaggerService.
@@ -65,9 +65,9 @@ func newPathWrapper(
 	swaggerPath string,
 	parameters map[string]*spec.Parameter,
 	method *desc.MethodDescriptor,
-) (*swaggerPathAdapter, error) {
+) (*operationAdapter, error) {
 	inputProtoType := method.GetInputType()
-	newValue := &swaggerPathAdapter{
+	newValue := &operationAdapter{
 		httpClient:      httpClient,
 		swaggerClient:   swaggerClient,
 		httpMethod:      httpMethod,
@@ -266,7 +266,7 @@ func getParamWriter(param *spec.Parameter) (func([]string, runtime.ClientRequest
 
 // Returns a serializer function for the given message. This is used to send a request through the
 // openapi-go library.
-func (p *swaggerPathAdapter) getRequestWriter(msg *dynamic.Message) runtime.ClientRequestWriterFunc {
+func (p *operationAdapter) getRequestWriter(msg *dynamic.Message) runtime.ClientRequestWriterFunc {
 	return func(request runtime.ClientRequest, format strfmt.Registry) error {
 		for _, writer := range p.paramWriters {
 			err := writer(msg, request)
@@ -279,7 +279,7 @@ func (p *swaggerPathAdapter) getRequestWriter(msg *dynamic.Message) runtime.Clie
 }
 
 // The deserializer function for this endpoint. This implements runtime.ClientResponseReader.
-func (p *swaggerPathAdapter) ReadResponse(
+func (p *operationAdapter) ReadResponse(
 	response runtime.ClientResponse,
 	consumer runtime.Consumer) (interface{}, error) {
 
@@ -291,7 +291,7 @@ func (p *swaggerPathAdapter) ReadResponse(
 
 // Handles a single gRPC call by proxying to the underlying swagger service.
 // Returns any error encountered.
-func (p *swaggerPathAdapter) handleGRPCRequest(stream grpc.ServerStream) error {
+func (p *operationAdapter) handleGRPCRequest(stream grpc.ServerStream) error {
 	protoIn := dynamic.NewMessage(p.inputProtoType)
 	err := stream.RecvMsg(protoIn)
 	if err != nil {
